@@ -9,9 +9,11 @@ import org.slf4j.LoggerFactory
 import ru.quipy.common.utils.TokenBucketRateLimiter
 import ru.quipy.core.EventSourcingService
 import ru.quipy.payments.api.PaymentAggregate
+import ru.quipy.payments.logic.MetricInterceptor.OkHttpMetricsInterceptor
 import java.net.SocketTimeoutException
 import java.time.Duration
-import java.util.UUID
+import java.util.*
+import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.Semaphore
 import java.util.concurrent.TimeUnit
 
@@ -40,9 +42,8 @@ class PaymentExternalSystemAdapterImpl(
     private val rateLimitPerSec = properties.rateLimitPerSec
     private val parallelRequests = properties.parallelRequests
 
-
     private val client = OkHttpClient.Builder().build()
-
+    
     private val rateLimiter = TokenBucketRateLimiter(
         rate = rateLimitPerSec,
         window = 1005,
@@ -53,6 +54,7 @@ class PaymentExternalSystemAdapterImpl(
     private val semaphore = Semaphore(parallelRequests, true)
 
     override fun performPaymentAsync(paymentId: UUID, amount: Int, paymentStartedAt: Long, deadline: Long) {
+        v.getAndIncrement()
         logger.warn("[$accountName] Submitting payment request for payment $paymentId")
 
         val transactionId = UUID.randomUUID()
@@ -128,7 +130,6 @@ class PaymentExternalSystemAdapterImpl(
                         it.logProcessing(false, now(), transactionId, reason = "Request timeout.")
                     }
                 }
-
                 else -> {
                     logger.error("[$accountName] Payment failed for txId: $transactionId, payment: $paymentId", e)
                     paymentESService.update(paymentId) {
@@ -150,6 +151,34 @@ class PaymentExternalSystemAdapterImpl(
     override fun isEnabled() = properties.enabled
 
     override fun name() = properties.accountName
+
+    fun calculatePercentiles(): Map<Int, Long> {
+        val sortedTimes = responseTimes.sorted()
+        return mapOf(
+            50 to percentile(sortedTimes, 50),
+            85 to percentile(sortedTimes, 85),
+            86 to percentile(sortedTimes, 86),
+            87 to percentile(sortedTimes, 87),
+            88 to percentile(sortedTimes, 88),
+            89 to percentile(sortedTimes, 89),
+            90 to percentile(sortedTimes, 80),
+            91 to percentile(sortedTimes, 90),
+            92 to percentile(sortedTimes, 92),
+            93 to percentile(sortedTimes, 93),
+            94 to percentile(sortedTimes, 94),
+            95 to percentile(sortedTimes, 95),
+            96 to percentile(sortedTimes, 96),
+            97 to percentile(sortedTimes, 97),
+            98 to percentile(sortedTimes, 98),
+            99 to percentile(sortedTimes, 99)
+        )
+    }
+
+    fun percentile(data: List<Long>, percentile: Int): Long {
+        if (data.isEmpty()) return 0
+        val index = (percentile / 100.0 * data.size).toInt().coerceAtMost(data.size - 1)
+        return data[index]
+    }
 
 }
 
