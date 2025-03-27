@@ -13,6 +13,7 @@ import java.net.SocketTimeoutException
 import java.time.Duration
 import java.util.*
 import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.Executors
 import java.util.concurrent.Semaphore
 import java.util.concurrent.TimeUnit
 
@@ -44,6 +45,8 @@ class PaymentExternalSystemAdapterImpl(
     val responseTimes = ConcurrentLinkedQueue<Long>()
 
     private val client = OkHttpClient.Builder().build()
+
+    private val pool = Executors.newFixedThreadPool(rateLimitPerSec)
     
     private val rateLimiter = TokenBucketRateLimiter(
         rate = rateLimitPerSec,
@@ -66,14 +69,16 @@ class PaymentExternalSystemAdapterImpl(
             it.logSubmission(success = true, transactionId, now(), Duration.ofMillis(now() - paymentStartedAt))
         }
 
-        var curIteration = 0
-        while (curIteration < MAX_RETRY_COUNT) {
-            val shouldRetry = performPayment(paymentId, transactionId, amount, deadline)
-            if (!shouldRetry) {
-                return
-            }
+        pool.submit {
+            var curIteration = 0
+            while (curIteration < MAX_RETRY_COUNT) {
+                val shouldRetry = performPayment(paymentId, transactionId, amount, deadline)
+                if (!shouldRetry) {
+                    return@submit
+                }
 
-            curIteration++
+                curIteration++
+            }
         }
     }
 
