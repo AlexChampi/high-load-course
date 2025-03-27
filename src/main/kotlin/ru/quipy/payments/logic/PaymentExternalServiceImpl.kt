@@ -9,7 +9,6 @@ import org.slf4j.LoggerFactory
 import ru.quipy.common.utils.TokenBucketRateLimiter
 import ru.quipy.core.EventSourcingService
 import ru.quipy.payments.api.PaymentAggregate
-import ru.quipy.payments.logic.MetricInterceptor.OkHttpMetricsInterceptor
 import java.net.SocketTimeoutException
 import java.time.Duration
 import java.util.*
@@ -42,6 +41,8 @@ class PaymentExternalSystemAdapterImpl(
     private val rateLimitPerSec = properties.rateLimitPerSec
     private val parallelRequests = properties.parallelRequests
 
+    val responseTimes = ConcurrentLinkedQueue<Long>()
+
     private val client = OkHttpClient.Builder().build()
     
     private val rateLimiter = TokenBucketRateLimiter(
@@ -54,7 +55,6 @@ class PaymentExternalSystemAdapterImpl(
     private val semaphore = Semaphore(parallelRequests, true)
 
     override fun performPaymentAsync(paymentId: UUID, amount: Int, paymentStartedAt: Long, deadline: Long) {
-        v.getAndIncrement()
         logger.warn("[$accountName] Submitting payment request for payment $paymentId")
 
         val transactionId = UUID.randomUUID()
