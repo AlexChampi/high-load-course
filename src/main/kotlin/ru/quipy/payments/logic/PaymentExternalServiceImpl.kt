@@ -40,6 +40,7 @@ class PaymentExternalSystemAdapterImpl(
     private val rateLimitPerSec = properties.rateLimitPerSec
     private val parallelRequests = properties.parallelRequests
 
+
     private val client = OkHttpClient.Builder().build()
 
     private val rateLimiter = TokenBucketRateLimiter(
@@ -52,6 +53,7 @@ class PaymentExternalSystemAdapterImpl(
     private val semaphore = Semaphore(parallelRequests, true)
 
     override fun performPaymentAsync(paymentId: UUID, amount: Int, paymentStartedAt: Long, deadline: Long) {
+        v.getAndIncrement()
         logger.warn("[$accountName] Submitting payment request for payment $paymentId")
 
         val transactionId = UUID.randomUUID()
@@ -149,6 +151,7 @@ class PaymentExternalSystemAdapterImpl(
     override fun isEnabled() = properties.enabled
 
     override fun name() = properties.accountName
+
 }
 
 public fun now() = System.currentTimeMillis()
