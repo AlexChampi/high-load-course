@@ -2,9 +2,11 @@ package ru.quipy.payments.logic
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.registerKotlinModule
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody
+import okhttp3.RequestBody.Companion.toRequestBody
 import org.slf4j.LoggerFactory
 import ru.quipy.common.utils.TokenBucketRateLimiter
 import ru.quipy.core.EventSourcingService
@@ -55,31 +57,28 @@ class PaymentExternalSystemAdapterImpl(
         timeUnit = TimeUnit.MILLISECONDS
     )
 
+    private val dispatcher = BulkPaymentDispatcher(
+        serviceName = serviceName,
+        accountName = accountName,
+        client = client,
+        paymentESService = paymentESService,
+        mapper = mapper,
+        logger = logger,
+        requestTimeout = requestTimeout
+    )
+
     private val semaphore = Semaphore(parallelRequests, true)
 
-    override fun performPaymentAsync(paymentId: UUID, amount: Int, paymentStartedAt: Long, deadline: Long) {
-        logger.warn("[$accountName] Submitting payment request for payment $paymentId")
 
+    override fun performPaymentAsync(paymentId: UUID, amount: Int, paymentStartedAt: Long, deadline: Long) {
         val transactionId = UUID.randomUUID()
         logger.info("[$accountName] Submit for $paymentId , txId: $transactionId")
 
-        // Вне зависимости от исхода оплаты важно отметить что она была отправлена.
-        // Это требуется сделать ВО ВСЕХ СЛУЧАЯХ, поскольку эта информация используется сервисом тестирования.
         paymentESService.update(paymentId) {
             it.logSubmission(success = true, transactionId, now(), Duration.ofMillis(now() - paymentStartedAt))
         }
 
-        pool.submit {
-            var curIteration = 0
-            while (curIteration < MAX_RETRY_COUNT) {
-                val shouldRetry = performPayment(paymentId, transactionId, amount, deadline)
-                if (!shouldRetry) {
-                    return@submit
-                }
-
-                curIteration++
-            }
-        }
+        dispatcher.submit(paymentId, transactionId, amount)
     }
 
     private fun performPayment(
@@ -188,3 +187,99 @@ class PaymentExternalSystemAdapterImpl(
 }
 
 public fun now() = System.currentTimeMillis()
+
+
+data class Request(
+    val transactionId: String,
+    val paymentId: String,
+    val amount: Int
+)
+
+data class BulkRequest(
+    val serviceName: String,
+    val accountName: String,
+    val requests: List<ru.quipy.payments.logic.Request>
+)
+
+data class Response(
+    val transactionId: String,
+    val paymentId: String,
+    val result: Boolean,
+    val message: String?
+)
+
+data class BulkResponse(
+    val responses: List<Response>
+)
+
+class BulkPaymentDispatcher(
+    private val serviceName: String,
+    private val accountName: String,
+    private val client: OkHttpClient,
+    private val paymentESService: EventSourcingService<UUID, PaymentAggregate, PaymentAggregateState>,
+    private val mapper: ObjectMapper,
+    private val logger: org.slf4j.Logger,
+    private val requestTimeout: Duration,
+    private val batchSize: Int = 20,
+    private val flushIntervalMs: Long = 300
+) {
+    private val queue = ConcurrentLinkedQueue<Triple<UUID, UUID, Int>>()
+    private val scheduler = Executors.newSingleThreadScheduledExecutor()
+
+    init {
+        scheduler.scheduleAtFixedRate({ flush() }, flushIntervalMs, flushIntervalMs, TimeUnit.MILLISECONDS)
+    }
+
+    fun submit(paymentId: UUID, transactionId: UUID, amount: Int) {
+        queue.add(Triple(paymentId, transactionId, amount))
+        if (queue.size >= batchSize) {
+            flush()
+        }
+    }
+
+    private fun flush() {
+        val batch = mutableListOf<Triple<UUID, UUID, Int>>()
+        while (true) {
+            val item = queue.poll() ?: break
+            batch.add(item)
+        }
+        if (batch.isEmpty()) return
+
+        val bulkReq = BulkRequest(
+            serviceName = serviceName,
+            accountName = accountName,
+            requests = batch.map { (paymentId, transactionId, amount) ->
+                Request(transactionId.toString(), paymentId.toString(), amount)
+            }
+        )
+
+        try {
+            val body = mapper.writeValueAsString(bulkReq)
+                .toRequestBody("application/json".toMediaType())
+            val request = Request.Builder()
+                .url("http://localhost:1234/external/process/bulk?timeout=${requestTimeout.toMillis()}")
+                .put(body)
+                .build()
+
+            client.newCall(request).execute().use { response ->
+                val bulkResp = mapper.readValue(response.body?.string(), BulkResponse::class.java)
+                bulkResp.responses.forEach { res ->
+                    val paymentId = UUID.fromString(res.paymentId)
+                    val transactionId = UUID.fromString(res.transactionId)
+                    logger.info("[$accountName] Bulk payment txId: $transactionId, result: ${res.result}, msg: ${res.message}")
+
+                    paymentESService.update(paymentId) {
+                        it.logProcessing(res.result, now(), transactionId, reason = res.message)
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            logger.error("[$accountName] Failed to process bulk", e)
+            batch.forEach { (paymentId, transactionId, _) ->
+                paymentESService.update(paymentId) {
+                    it.logProcessing(false, now(), transactionId, reason = e.message)
+                }
+            }
+        }
+    }
+}
