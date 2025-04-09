@@ -9,6 +9,7 @@ import org.slf4j.LoggerFactory
 import ru.quipy.common.utils.TokenBucketRateLimiter
 import ru.quipy.core.EventSourcingService
 import ru.quipy.payments.api.PaymentAggregate
+import ru.quipy.payments.logic.MetricInterceptor.OkHttpMetricsInterceptor
 import java.net.SocketTimeoutException
 import java.time.Duration
 import java.util.*
@@ -44,10 +45,11 @@ class PaymentExternalSystemAdapterImpl(
 
     val responseTimes = ConcurrentLinkedQueue<Long>()
 
-    private val client = OkHttpClient.Builder().build()
+    private val client = OkHttpClient.Builder().addInterceptor(OkHttpMetricsInterceptor())
+        .build()
 
     private val pool = Executors.newFixedThreadPool(rateLimitPerSec)
-    
+
     private val rateLimiter = TokenBucketRateLimiter(
         rate = rateLimitPerSec,
         window = 1005,
@@ -135,6 +137,7 @@ class PaymentExternalSystemAdapterImpl(
                         it.logProcessing(false, now(), transactionId, reason = "Request timeout.")
                     }
                 }
+
                 else -> {
                     logger.error("[$accountName] Payment failed for txId: $transactionId, payment: $paymentId", e)
                     paymentESService.update(paymentId) {
