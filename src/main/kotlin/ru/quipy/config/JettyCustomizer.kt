@@ -12,15 +12,15 @@ import ru.quipy.payments.logic.PaymentExternalSystemAdapterImpl.Companion.logger
 @Configuration
 class JettyCustomizer {
 
-    @Bean
-    fun tomcatConnectorCustomizer(): TomcatConnectorCustomizer {
-        return TomcatConnectorCustomizer {
-            try {
-                (it.protocolHandler.findUpgradeProtocols().get(0) as Http2Protocol)
-                    .maxConcurrentStreams = 10_000_000
-            } catch (e: Exception) {
-                logger.error("!!! Failed to increase number of http2 streams per connection !!!")
-            }
-        }
-    }
+//    @Bean
+//    fun tomcatConnectorCustomizer(): TomcatConnectorCustomizer {
+//        return TomcatConnectorCustomizer {
+//            try {
+//                (it.protocolHandler.findUpgradeProtocols().get(0) as Http2Protocol)
+//                    .maxConcurrentStreams = 10_000_000
+//            } catch (e: Exception) {
+//                logger.error("!!! Failed to increase number of http2 streams per connection !!!")
+//            }
+//        }
+//    }
 }

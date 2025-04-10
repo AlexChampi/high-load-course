@@ -43,14 +43,14 @@ class PaymentExternalSystemAdapterImpl(
     private val requestTimeout = requestAverageProcessingTime.multipliedBy(2)
 //    private val requestTimeout = requestAverageProcessingTime.multipliedBy(12).dividedBy(10)
 //    private val rateLimitPerSec = properties.rateLimitPerSec
-    private val rateLimitPerSec = 1000
-    private val parallelRequests = properties.parallelRequests
+    private val rateLimitPerSec = 1000 / instances
+    private val parallelRequests = properties.parallelRequests / instances
 
     val responseTimes = ConcurrentLinkedQueue<Long>()
 
     private val client = HttpClient.newBuilder()
         .connectTimeout(requestTimeout)
-        .version(HttpClient.Version.HTTP_2)
+        .version(HttpClient.Version.HTTP_1_1)
         .build()
 
     private val rateLimiter = TokenBucketRateLimiter(
