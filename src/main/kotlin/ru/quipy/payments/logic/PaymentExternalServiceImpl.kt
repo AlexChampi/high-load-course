@@ -1,10 +1,9 @@
 package ru.quipy.payments.logic
 
+import MultiClientManager
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.registerKotlinModule
-import okhttp3.OkHttpClient
-import okhttp3.Request
-import okhttp3.RequestBody
+import okhttp3.*
 import org.slf4j.LoggerFactory
 import ru.quipy.common.utils.TokenBucketRateLimiter
 import ru.quipy.core.EventSourcingService
@@ -21,7 +20,8 @@ import java.util.concurrent.TimeUnit
 // Advice: always treat time as a Duration
 class PaymentExternalSystemAdapterImpl(
     private val properties: PaymentAccountProperties,
-    private val paymentESService: EventSourcingService<UUID, PaymentAggregate, PaymentAggregateState>
+    private val paymentESService: EventSourcingService<UUID, PaymentAggregate, PaymentAggregateState>,
+    private val instances: Int
 ) : PaymentExternalSystemAdapter {
 
     companion object {
@@ -40,16 +40,24 @@ class PaymentExternalSystemAdapterImpl(
     private val accountName = properties.accountName
     private val requestAverageProcessingTime = properties.averageProcessingTime
     private val requestTimeout = requestAverageProcessingTime.multipliedBy(2)
-    private val rateLimitPerSec = properties.rateLimitPerSec
-    private val parallelRequests = properties.parallelRequests
+    private val rateLimitPerSec = properties.rateLimitPerSec / instances
+    private val parallelRequests = properties.parallelRequests / instances
 
     val responseTimes = ConcurrentLinkedQueue<Long>()
 
-    private val client = OkHttpClient.Builder().addInterceptor(OkHttpMetricsInterceptor())
+    val dispatcher = Dispatcher().apply {
+        maxRequests = rateLimitPerSec
+        maxRequestsPerHost = rateLimitPerSec
+    }
+    private val client = OkHttpClient.Builder()
+        .dispatcher(dispatcher)
+        .addInterceptor(OkHttpMetricsInterceptor())
+        .protocols(listOf(Protocol.H2_PRIOR_KNOWLEDGE))
+        .callTimeout(requestTimeout)
         .build()
 
     private val pool = Executors.newFixedThreadPool(rateLimitPerSec)
-
+    val multiClientManager = MultiClientManager()
     private val rateLimiter = TokenBucketRateLimiter(
         rate = rateLimitPerSec,
         window = 1005,
@@ -91,7 +99,7 @@ class PaymentExternalSystemAdapterImpl(
         deadline: Long
     ): Boolean {
         val request = Request.Builder().run {
-            url("http://localhost:1234/external/process?serviceName=${serviceName}&accountName=${accountName}&transactionId=$transactionId&paymentId=$paymentId&amount=$amount&timeout=${requestTimeout}")
+            url("http://host.docker.internal:1234/external/process?serviceName=${serviceName}&accountName=${accountName}&transactionId=$transactionId&paymentId=$paymentId&amount=$amount&timeout=${requestTimeout}")
             post(emptyBody)
         }.build()
 
@@ -115,6 +123,7 @@ class PaymentExternalSystemAdapterImpl(
             client.newCall(request).execute().use { response ->
                 val body = try {
                     mapper.readValue(response.body?.string(), ExternalSysResponse::class.java)
+
                 } catch (e: Exception) {
                     logger.error("[$accountName] [ERROR] Payment processed for txId: $transactionId, payment: $paymentId, result code: ${response.code}, reason: ${response.body?.string()}")
                     ExternalSysResponse(transactionId.toString(), paymentId.toString(), false, e.message)
@@ -126,6 +135,8 @@ class PaymentExternalSystemAdapterImpl(
                 paymentESService.update(paymentId) {
                     it.logProcessing(body.result, now(), transactionId, reason = body.message)
                 }
+                println("DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD PROTOCOLITO. "  + response.protocol)
+
                 // percentileTracker.recordDuration(now() - requestStarted)
                 return !body.result
             }

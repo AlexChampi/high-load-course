@@ -6,6 +6,7 @@ import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.web.bind.annotation.*
 import ru.quipy.orders.repository.OrderRepository
 import ru.quipy.payments.logic.OrderPayer
+import java.io.Serializable
 import java.util.*
 
 @RestController
@@ -46,9 +47,9 @@ class APIController {
         val timeCreated: Long,
         val status: OrderStatus,
         val price: Int,
-    )
+    ) : Serializable
 
-    enum class OrderStatus {
+    enum class OrderStatus : Serializable {
         COLLECTING,
         PAYMENT_IN_PROGRESS,
         PAID,

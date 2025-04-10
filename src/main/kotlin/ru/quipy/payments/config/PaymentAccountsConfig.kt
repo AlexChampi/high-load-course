@@ -29,6 +29,9 @@ class PaymentAccountsConfig {
     @Value("\${payment.hostPort}")
     lateinit var paymentProviderHostPort: String
 
+    @Value("\${custom.instances}")
+    lateinit var instanceCount: String
+
     private val allowedAccounts = setOf("acc-12")
 
     @Bean
@@ -48,6 +51,6 @@ class PaymentAccountsConfig {
             .filter {
                 it.accountName in allowedAccounts
             }.onEach(::println)
-            .map { PaymentExternalSystemAdapterImpl(it, paymentService) }
+            .map { PaymentExternalSystemAdapterImpl(it, paymentService, instanceCount.toInt()) }
     }
 }
