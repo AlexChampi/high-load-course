@@ -34,7 +34,7 @@ class PaymentExternalSystemAdapterImpl(
 
         private const val THREAD_SLEEP_MILLIS = 5L
         private const val PROCESSING_TIME_MILLIS = 6000
-        private const val MAX_RETRY_COUNT = 4
+        private const val MAX_RETRY_COUNT = 0
         private const val MAX_PAYMENT_REQUEST_DURATION = 1500L
     }
 
@@ -42,14 +42,16 @@ class PaymentExternalSystemAdapterImpl(
     private val accountName = properties.accountName
     private val requestAverageProcessingTime = properties.averageProcessingTime
     private val requestTimeout = requestAverageProcessingTime.multipliedBy(2)
-    private val rateLimitPerSec = properties.rateLimitPerSec
+//    private val requestTimeout = requestAverageProcessingTime.multipliedBy(12).dividedBy(10)
+//    private val rateLimitPerSec = properties.rateLimitPerSec
+    private val rateLimitPerSec = 1000
     private val parallelRequests = properties.parallelRequests
 
     val responseTimes = ConcurrentLinkedQueue<Long>()
 
     private val client = HttpClient.newBuilder()
         .connectTimeout(requestTimeout)
-        .version(HttpClient.Version.HTTP_1_1)
+        .version(HttpClient.Version.HTTP_2)
         .build()
 
     private val rateLimiter = TokenBucketRateLimiter(
@@ -83,64 +85,85 @@ class PaymentExternalSystemAdapterImpl(
         deadline: Long,
         attempt: Int
     ) {
-        if (!rateLimiter.tick() || !semaphore.tryAcquire()) {
-            CompletableFuture.delayedExecutor(1, TimeUnit.MILLISECONDS).execute {
-                tryPerformPayment(paymentId, transactionId, amount, deadline, attempt)
-            }
-            return
+        while (!rateLimiter.tick()) {
+            Thread.sleep(THREAD_SLEEP_MILLIS)
         }
+        var isAcquired = false
 
-        val uri = URI.create(
-            "http://localhost:1234/external/process?serviceName=$serviceName&accountName=$accountName&transactionId=$transactionId&paymentId=$paymentId&amount=$amount&timeout=$requestTimeout"
-        )
+        try {
 
-        val request = HttpRequest.newBuilder()
-            .uri(uri)
-            .timeout(requestTimeout)
-            .POST(HttpRequest.BodyPublishers.noBody())
-            .build()
+            isAcquired = semaphore.tryAcquire(deadline - now(), TimeUnit.MILLISECONDS)
+            if (!isAcquired) {
+                logger.error(
+                    "[$accountName] Payment failed to acquire semaphore for txId: $transactionId, payment: $paymentId"
+                )
+                paymentESService.update(paymentId) {
+                    it.logProcessing(false, now(), transactionId, reason = "Failed to acquire semaphore.")
+                }
+                return
+            }
+//
+//            if (!rateLimiter.tick() || !semaphore.tryAcquire()) {
+//                CompletableFuture.delayedExecutor(1, TimeUnit.MILLISECONDS).execute {
+//                    tryPerformPayment(paymentId, transactionId, amount, deadline, attempt)
+//                }
+//                return
+//            }
 
-        client.sendAsync(request, HttpResponse.BodyHandlers.ofString())
-            .whenComplete { response, ex ->
-                semaphore.release()
+            val uri = URI.create(
+                "http://localhost:1234/external/process?serviceName=$serviceName&accountName=$accountName&transactionId=$transactionId&paymentId=$paymentId&amount=$amount&timeout=$requestTimeout"
+            )
 
-                if (ex != null) {
-                    val reason = when (ex) {
-                        is HttpTimeoutException -> "Request timeout"
-                        else -> ex.message ?: "Unknown error"
+            val request = HttpRequest.newBuilder()
+                .uri(uri)
+                .timeout(requestTimeout)
+                .POST(HttpRequest.BodyPublishers.noBody())
+                .build()
+
+            client.sendAsync(request, HttpResponse.BodyHandlers.ofString())
+                .whenComplete { response, ex ->
+                    semaphore.release()
+
+                    if (ex != null) {
+                        val reason = when (ex) {
+                            is HttpTimeoutException -> "Request timeout"
+                            else -> ex.message ?: "Unknown error"
+                        }
+
+                        logger.error("[$accountName] Payment failed: $reason", ex)
+                        paymentESService.update(paymentId) {
+                            it.logProcessing(false, now(), transactionId, reason)
+                        }
+
+                        if (attempt < MAX_RETRY_COUNT) {
+                            tryPerformPayment(paymentId, transactionId, amount, deadline, attempt + 1)
+                        }
+
+                        return@whenComplete
                     }
 
-                    logger.error("[$accountName] Payment failed: $reason", ex)
+                    val responseBody = response.body()
+                    val body = try {
+                        mapper.readValue(responseBody, ExternalSysResponse::class.java)
+                    } catch (e: Exception) {
+                        logger.error("[$accountName] Failed to parse response: $responseBody", e)
+                        ExternalSysResponse(transactionId.toString(), paymentId.toString(), false, "Parse error")
+                    }
+
                     paymentESService.update(paymentId) {
-                        it.logProcessing(false, now(), transactionId, reason)
+                        it.logProcessing(body.result, now(), transactionId, body.message)
                     }
 
-                    if (attempt < MAX_RETRY_COUNT) {
+                    if (!body.result && attempt < MAX_RETRY_COUNT) {
                         tryPerformPayment(paymentId, transactionId, amount, deadline, attempt + 1)
                     }
-
-                    return@whenComplete
                 }
-
-                val responseBody = response.body()
-                val body = try {
-                    mapper.readValue(responseBody, ExternalSysResponse::class.java)
-                } catch (e: Exception) {
-                    logger.error("[$accountName] Failed to parse response: $responseBody", e)
-                    ExternalSysResponse(transactionId.toString(), paymentId.toString(), false, "Parse error")
-                }
-
-                paymentESService.update(paymentId) {
-                    it.logProcessing(body.result, now(), transactionId, body.message)
-                }
-
-                if (!body.result && attempt < MAX_RETRY_COUNT) {
-                    tryPerformPayment(paymentId, transactionId, amount, deadline, attempt + 1)
-                }
+        } finally {
+            if (isAcquired) {
+                semaphore.release()
             }
+        }
     }
-
-
 
 
     /*    private fun performPayment(
