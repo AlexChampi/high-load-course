@@ -1,4 +1,153 @@
 services:
+  nginx:
+    image: nginx:latest
+    ports:
+      - "8082:8082"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+#      - ./nginx_logs/access.log:/var/log/nginx/access.log
+#      - ./nginx_logs/error.log:/var/log/nginx/error.log
+    depends_on:
+      - online-store1
+      - online-store2
+      - online-store3
+      - online-store4
+      - online-store5
+      - online-store6
+      - online-store7
+      - online-store8
+
+  nginx-exporter:
+    image: nginx/nginx-prometheus-exporter:latest
+    command:
+      - "--nginx.scrape-uri=http://nginx:8082/nginx_status"
+    ports:
+      - "9113:9113"
+    depends_on:
+      - nginx
+
+  online-store1:
+    build:
+      context: .
+    environment:
+      - SERVER_PORT=8083
+      - POSTGRES_ADDRESS=postgres
+      - POSTGRES_PORT=5432
+      - PAYMENT_HOST=host.docker.internal
+      - PAYMENT_PORT=1234
+      - REDIS_HOST=redis
+      - INSTANCES=8
+    ports:
+      - "8083:8083"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  online-store2:
+    build:
+      context: .
+    environment:
+      - SERVER_PORT=8084
+      - POSTGRES_ADDRESS=postgres
+      - POSTGRES_PORT=5432
+      - PAYMENT_HOST=host.docker.internal
+      - PAYMENT_PORT=1234
+      - REDIS_HOST=redis
+      - INSTANCES=8
+    ports:
+      - "8084:8084"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  online-store3:
+    build:
+      context: .
+    environment:
+      - SERVER_PORT=8085
+      - POSTGRES_ADDRESS=postgres
+      - POSTGRES_PORT=5432
+      - PAYMENT_HOST=host.docker.internal
+      - PAYMENT_PORT=1234
+      - REDIS_HOST=redis
+      - INSTANCES=8
+    ports:
+      - "8085:8085"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+  online-store4:
+    build:
+      context: .
+    environment:
+      - SERVER_PORT=8086
+      - POSTGRES_ADDRESS=postgres
+      - POSTGRES_PORT=5432
+      - PAYMENT_HOST=host.docker.internal
+      - PAYMENT_PORT=1234
+      - REDIS_HOST=redis
+      - INSTANCES=8
+    ports:
+      - "8086:8086"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+  online-store5:
+    build:
+      context: .
+    environment:
+      - SERVER_PORT=8087
+      - POSTGRES_ADDRESS=postgres
+      - POSTGRES_PORT=5432
+      - PAYMENT_HOST=host.docker.internal
+      - PAYMENT_PORT=1234
+      - REDIS_HOST=redis
+      - INSTANCES=8
+    ports:
+      - "8087:8087"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+  online-store6:
+    build:
+      context: .
+    environment:
+      - SERVER_PORT=8088
+      - POSTGRES_ADDRESS=postgres
+      - POSTGRES_PORT=5432
+      - PAYMENT_HOST=host.docker.internal
+      - PAYMENT_PORT=1234
+      - REDIS_HOST=redis
+      - INSTANCES=8
+    ports:
+      - "8088:8088"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+  online-store7:
+    build:
+      context: .
+    environment:
+      - SERVER_PORT=8089
+      - POSTGRES_ADDRESS=postgres
+      - POSTGRES_PORT=5432
+      - PAYMENT_HOST=host.docker.internal
+      - PAYMENT_PORT=1234
+      - REDIS_HOST=redis
+      - INSTANCES=8
+    ports:
+      - "8089:8089"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+  online-store8:
+    build:
+      context: .
+    environment:
+      - SERVER_PORT=8090
+      - POSTGRES_ADDRESS=postgres
+      - POSTGRES_PORT=5432
+      - PAYMENT_HOST=host.docker.internal
+      - PAYMENT_PORT=1234
+      - REDIS_HOST=redis
+      - INSTANCES=8
+    ports:
+      - "8090:8090"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
   postgres:
     hostname: event_sourcing_db
     image: postgres:14.9-alpine
@@ -11,6 +160,11 @@ services:
     ports:
       - ${POSTGRES_CONTAINER_EXPOSED_PORT}:${POSTGRES_CONTAINER_INTERNAL_PORT}
     command: postgres -c shared_preload_libraries=pg_stat_statements -c pg_stat_statements.track=all -c max_connections=200
+    restart: unless-stopped
+  redis:
+    image: redis:7.2-alpine
+    ports:
+      - "6379:6379"
     restart: unless-stopped
 #  mongo:
 #    build:
